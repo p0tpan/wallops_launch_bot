@@ -305,9 +305,15 @@ def create_post_text(launch=None, closest_launch=None, has_specific_times=False,
 
 
 def post_to_bluesky(launches=None, closest_launch=None, has_specific_times=False):
-    # Bluesky ATP credentials - Replace with your details
-    BLUESKY_USERNAME = "wallopslaunchbot.bsky.social"
-    BLUESKY_PASSWORD = "'vC79>nB&XgkGzf"
+    # Get Bluesky credentials from environment variables
+    BLUESKY_USERNAME = os.environ.get("BLUESKY_USERNAME")
+    BLUESKY_PASSWORD = os.environ.get("BLUESKY_PASSWORD")
+
+    # Check if environment variables are set
+    if not BLUESKY_USERNAME or not BLUESKY_PASSWORD:
+        logging.error("Bluesky credentials not found in environment variables.")
+        logging.error("Please set BLUESKY_USERNAME and BLUESKY_PASSWORD environment variables.")
+        return False
 
     try:
         # Create a client and authenticate
