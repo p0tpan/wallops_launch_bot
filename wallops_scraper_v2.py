@@ -307,7 +307,7 @@ def create_post_text(launch=None, closest_launch=None, has_specific_times=False,
 def post_to_bluesky(launches=None, closest_launch=None, has_specific_times=False):
     # Bluesky ATP credentials - Replace with your details
     BLUESKY_USERNAME = "wallopslaunchbot.bsky.social"
-    BLUESKY_PASSWORD = "'vC79>nB&XgkGzf"
+    BLUESKY_PASSWORD = "wallopsnewpassword"
 
     try:
         # Create a client and authenticate
