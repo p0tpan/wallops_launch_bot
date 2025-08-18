@@ -259,48 +259,57 @@ def create_post_text(launch=None, closest_launch=None, has_specific_times=False,
     current_date = datetime.datetime.now().strftime('%Y-%m-%d')
     post_text = ""
 
-    # Create the post text based on the input
+    # Helper to shorten vehicle line
+    def shorten_vehicle(vehicle_text):
+        if not vehicle_text:
+            return None
+        # Option 1: just take the first part before a dash
+        short_vehicle = vehicle_text.split("-")[0].strip()
+        # Option 2 (fallback): if still too long, truncate
+        if count_graphemes(short_vehicle) > 50:
+            short_vehicle = short_vehicle[:47] + "..."
+        return short_vehicle
+
     if launch and not is_update:
-        # This is a specific launch post
+        # Specific launch post
         post_text = f"🚀 Wallops Launch Alert 🚀\n\n"
         post_text += f"Mission: {launch['mission']}\n"
         if launch.get('vehicle'):
-            post_text += f"Vehicle: {launch['vehicle']}\n"
+            short_vehicle = shorten_vehicle(launch['vehicle'])
+            post_text += f"Vehicle: {short_vehicle}\n"
         post_text += f"Date: {launch['date']}\n"
-        post_text += f"Time: {launch['time']}\n\n"
+        if launch.get('time'):
+            post_text += f"Time: {launch['time']}\n\n"
     else:
-        # This is a general update post
+        # General update
         post_text = f"🚀 Wallops Launch Update ({current_date}) 🚀\n\n"
-
         if not has_specific_times:
             post_text += "No launches with specific times found on the schedule at this time.\n\n"
 
-    # Add closest launch info if available and different from current launch
+    # Closest launch info
     if closest_launch and (not launch or closest_launch['mission'] != launch.get('mission')):
         post_text += "➡️ Next upcoming launch:\n"
         post_text += f"Mission: {closest_launch['mission']}\n"
         if closest_launch.get('vehicle'):
-            post_text += f"Vehicle: {closest_launch['vehicle']}\n"
+            short_vehicle = shorten_vehicle(closest_launch['vehicle'])
+            post_text += f"Vehicle: {short_vehicle}\n"
         post_text += f"Date: {closest_launch['date']}\n"
         if closest_launch.get('time'):
             post_text += f"Time: {closest_launch['time']}\n"
 
-    # If we're over the limit, trim the content
+    # Trim if over limit
     if count_graphemes(post_text) > 300:
-        # Try to find a good cutoff point
         lines = post_text.split('\n')
         trimmed_text = ""
         for line in lines:
-            if count_graphemes(trimmed_text + line + '\n') <= 297:  # Leave room for ellipsis
+            if count_graphemes(trimmed_text + line + '\n') <= 297:
                 trimmed_text += line + '\n'
             else:
                 break
         post_text = trimmed_text + "..."
 
-    # Log output
     grapheme_count = count_graphemes(post_text)
     logging.info(f"Post has {grapheme_count} graphemes")
-
     return post_text
 
 
