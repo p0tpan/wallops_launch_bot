@@ -284,7 +284,7 @@ def create_post_text(launch=None, closest_launch=None, has_specific_times=False,
         # General update
         post_text = f"🚀 Wallops Launch Update ({current_date}) 🚀\n\n"
         if not has_specific_times:
-            post_text += "No launches with specific times found on the schedule at this time.\n\n"
+            post_text += ""
 
     # Closest launch info
     if closest_launch and (not launch or closest_launch['mission'] != launch.get('mission')):
