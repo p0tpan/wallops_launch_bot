@@ -77,179 +77,172 @@ def clean_time_info(time_info):
 
     return time_info
 
-
 def check_for_specific_launch_times():
-    # URL to scrape
     url = "https://www.nasa.gov/wallops-launch-schedule/"
 
-    # Get the webpage content
     try:
-        response = requests.get(url)
+        response = requests.get(url, headers={"User-Agent": "Mozilla/5.0"})
         response.raise_for_status()
         logging.info(f"Successfully retrieved page with status code: {response.status_code}")
     except requests.exceptions.RequestException as e:
         logging.error(f"Failed to retrieve the webpage: {e}")
         return None, None
 
-    # Parse the HTML content
     soup = BeautifulSoup(response.text, 'html.parser')
 
-    # Log page title to confirm we're getting the right page
     page_title = soup.title.text if soup.title else "No title found"
     logging.info(f"Page title: {page_title}")
 
-    # Find launch information - based on the HTML structure you provided
-    # Look for sections with "Mission:", "Vehicle:", "Date:", "Time:" text
-
-    # First, save the HTML for debugging if needed
     with open("wallops_debug.html", "w", encoding="utf-8") as f:
         f.write(response.text)
     logging.info("Saved HTML to wallops_debug.html for debugging")
 
-    # Try multiple approaches to find launch information
+    # ── NEW FIELD NAMES ──────────────────────────────────────────────────────
+    # Website now uses:
+    #   "Rocket Type:"  (was "Vehicle:" / "Mission:")
+    #   "Launch Date:"  (was "Date:")
+    #   "Launch Location:" (was "Location:")
+    #   "Description:"  (was "Mission:" description)
+    # ────────────────────────────────────────────────────────────────────────
 
-    # Approach 1: Look for paragraphs or divs containing the mission info
-    launch_entries = []
+    time_pattern = re.compile(
+        r'\d{1,2}:\d{2}\s*(?:a\.m\.|p\.m\.|EDT|EST|UTC|GMT|PDT|PST)', re.IGNORECASE
+    )
+    today = datetime.datetime.now().date()
 
-    # Find all paragraphs or divs that might contain launch info
-    potential_containers = soup.find_all(['p', 'div', 'section'])
-
-    for container in potential_containers:
-        text = container.get_text()
-        # If the container has multiple mission keywords, it likely contains launch info
-        if (re.search(r'Mission:', text, re.IGNORECASE) and
-                (re.search(r'Vehicle:', text, re.IGNORECASE) or
-                 re.search(r'Date:', text, re.IGNORECASE) or
-                 re.search(r'Time:', text, re.IGNORECASE))):
-            launch_entries.append(container)
-            logging.info(f"Found potential launch entry: {text[:100]}...")
-
-    # If we didn't find anything with that approach, try a broader search
-    if not launch_entries:
-        logging.info("No launch entries found with first approach, trying broader search...")
-        # Look for strong tags with "Mission:" text
-        mission_tags = soup.find_all('strong', string=lambda s: s and 'Mission:' in s)
-
-        for tag in mission_tags:
-            # Get the parent container that should have all the launch info
-            parent = tag.find_parent(['p', 'div', 'li'])
-            if parent and parent not in launch_entries:
-                launch_entries.append(parent)
-                logging.info(f"Found mission tag parent: {parent.get_text()[:100]}...")
-
-    # Process the entries to find specific times and all launches
     launches_with_specific_times = []
     all_launches = []
 
-    # Pattern to match specific times (e.g., "10:15 a.m. EDT", "15:30 UTC", "12:45 p.m.")
-    time_pattern = re.compile(r'\d{1,2}:\d{2}\s*(?:a\.m\.|p\.m\.|EDT|EST|UTC|GMT|PDT|PST)', re.IGNORECASE)
-    today = datetime.datetime.now().date()
+    # Find every container that has at least "Rocket Type:" and "Launch Date:"
+    potential_containers = soup.find_all(['p', 'div', 'section', 'li', 'article'])
+
+    # MAX_ENTRY_CHARS: real launch entries are compact. Any container whose
+    # text exceeds this is a page-wrapper that happens to contain a launch
+    # entry somewhere inside it — skip it and let the inner element match.
+    MAX_ENTRY_CHARS = 2000
+
+    launch_entries = []
+
+    for container in potential_containers:
+        text = container.get_text(" ", strip=True)
+        # Normalise whitespace before length check so we measure real content
+        text_norm = re.sub(r'\s+', ' ', text)
+        if len(text_norm) > MAX_ENTRY_CHARS:
+            continue  # too large — this is a page/section wrapper, not a launch entry
+        if (re.search(r'Rocket Type:', text_norm, re.IGNORECASE) and
+                re.search(r'Launch Date:', text_norm, re.IGNORECASE)):
+            launch_entries.append(container)
+            logging.info(f"Found candidate container ({len(text_norm)} chars): {text_norm[:120]}...")
 
     logging.info(f"Processing {len(launch_entries)} potential launch entries")
 
     for entry in launch_entries:
-        entry_text = entry.get_text()
+        text = entry.get_text(" ", strip=True)
+        text = re.sub(r'[\xa0\u200b]+', ' ', text)
+        text = re.sub(r'\s+', ' ', text).strip()
 
-        # Extract mission information
-        mission_match = re.search(r'Mission:[\s\xa0]*([^:]+?)(?=Vehicle:|Date:|Time:|$)', entry_text, re.IGNORECASE)
-        vehicle_match = re.search(r'Vehicle:[\s\xa0]*([^:]+?)(?=Mission:|Date:|Time:|$)', entry_text, re.IGNORECASE)
+        # ── Extract each field with updated labels ───────────────────────────
+        rocket_match = re.search(
+            r'Rocket\s*Type\s*:\s*(.+?)(?=Launch\s*Date|Launch\s*Location|Description|$)',
+            text, re.IGNORECASE | re.DOTALL
+        )
+        date_match = re.search(
+           r'Launch\s*Date\s*:\s*(.+?)(?=Launch\s*Location|Rocket\s*Type|Description|$)',
+           text, re.IGNORECASE | re.DOTALL
+        )
+        location_match = re.search(
+            r'Launch\s*Location\s*:\s*(.+?)(?=Description|Rocket\s*Type|Launch\s*Date|$)',
+            text, re.IGNORECASE | re.DOTALL
+        )
+        desc_match = re.search(
+            r'Description\s*:\s*(.+?)(?=Rocket\s*Type|Launch\s*Date|Launch\s*Location|$)',
+            text, re.IGNORECASE | re.DOTALL
+        )
+        logging.info(f"Regex results — rocket:{bool(rocket_match)} date:{bool(date_match)} in text: {text[:150]}")
 
-        # Modified regex to stop at "Time:"
-        date_match = re.search(r'Date:[\s\xa0]*([^:]+?)(?=Time:|$)', entry_text, re.IGNORECASE)
-
-        # Extract time information separately
-        time_match = re.search(r'Time:[\s\xa0]*([^:]+?)(?=Location:|$)', entry_text, re.IGNORECASE)
-
-        # Only process if we found at least mission and date
-        if not (mission_match and date_match):
+        if not (rocket_match and date_match):
+            logging.info(f"Skipping entry — missing Rocket Type or Launch Date in: {text[:80]}")
             continue
 
-        mission = mission_match.group(1).strip() if mission_match else None
-        vehicle = vehicle_match.group(1).strip() if vehicle_match else None
-        date_text = date_match.group(1).strip() if date_match else None
-        time_info = time_match.group(1).strip() if time_match else None
+        rocket_type  = rocket_match.group(1).strip()[:200]
+        date_text    = date_match.group(1).strip()[:100]
+        location     = (location_match.group(1).strip()[:200] if location_match else None)
+        description  = (desc_match.group(1).strip()[:300]     if desc_match     else None)
 
-        # Skip entries with missing critical info
-        if not mission or not date_text:
-            continue
+        # ── Pull the time out of the date field ─────────────────────────────
+        # e.g. "June 24-25, 2026, 5:30 a.m.-9:30 a.m. EDT"
+        time_info = None
+        time_in_date = time_pattern.search(date_text)
+        if time_in_date:
+            # Everything from the first time token onward becomes time_info
+            time_info = date_text[time_in_date.start():].strip()
+            # Strip the time portion from date_text so parsing works
+            date_text = date_text[:time_in_date.start()].rstrip(', ').strip()
 
-        # Try to clean up mission name (remove URLs etc.)
-        if mission:
-            # Remove common HTML artifacts
-            mission = re.sub(r'\s+', ' ', mission)  # Normalize whitespace
-            mission = re.sub(r'\xa0', ' ', mission)  # Replace non-breaking spaces
-
-        # Clean up vehicle info if needed
-        if vehicle:
-            vehicle = re.sub(r'\s+', ' ', vehicle)  # Normalize whitespace
-            vehicle = re.sub(r'\xa0', ' ', vehicle)  # Replace non-breaking spaces
-
-        # Clean up date info
-        if date_text:
-            date_text = re.sub(r'\s+', ' ', date_text)  # Normalize whitespace
-            date_text = re.sub(r'\xa0', ' ', date_text)  # Replace non-breaking spaces
-
-        # Clean up time info
-        if time_info:
-            time_info = re.sub(r'\s+', ' ', time_info)  # Normalize whitespace
-            time_info = re.sub(r'\xa0', ' ', time_info)  # Replace non-breaking spaces
-            # Apply extra cleaning to remove location information
-            time_info = clean_time_info(time_info)
-
-        # Try to parse the date to determine if it's in the future
+        # ── Parse the date ───────────────────────────────────────────────────
         launch_date = None
         try:
-            # Handle various date formats
-            date_text_clean = re.sub(r'\s*\(.*?\)', '', date_text)  # Remove parenthetical comments
-            date_text_clean = re.sub(r',\s*back-up day.*', '', date_text_clean)  # Remove backup dates
-            launch_date = date_parser.parse(date_text_clean, fuzzy=True).date()
-            logging.info(f"Successfully parsed date '{date_text_clean}' to {launch_date}")
+            date_clean = re.sub(r'\s*\(.*?\)', '', date_text)   # drop parentheticals
+            date_clean = re.sub(r'[-–]\d+', '', date_clean)     # "24-25" → "24"
+            launch_date = date_parser.parse(date_clean, fuzzy=True).date()
+            logging.info(f"Parsed '{date_clean}' → {launch_date}")
         except Exception as e:
             logging.warning(f"Could not parse date '{date_text}': {e}")
 
-        # Create the launch info dictionary
         launch_info = {
-            'mission': mission,
-            'vehicle': vehicle,
-            'date': date_text,
-            'date_obj': launch_date,
-            'time': time_info
+            'mission':     description or rocket_type,   # use description as mission label
+            'vehicle':     rocket_type,
+            'date':        date_text,
+            'date_obj':    launch_date,
+            'time':        time_info,
+            'location':    location,
         }
 
-        # Log debug info
-        logging.info(f"Found launch: {mission} on {date_text} at {time_info}")
+        logging.info(
+            f"Launch found → vehicle={rocket_type!r}  date={date_text!r}  time={time_info!r}"
+        )
 
-        # Only add entries with valid mission and date
-        if mission != "Unknown Mission" and date_text != "Unknown Date":
-            all_launches.append(launch_info)
-
-            # Check if time information contains a specific time rather than just "Morning" or "Afternoon"
-            if time_info and time_pattern.search(time_info):
-                launches_with_specific_times.append(launch_info)
+        all_launches.append(launch_info)
+        if time_info and time_pattern.search(time_info):
+            launches_with_specific_times.append(launch_info)
 
     logging.info(f"Processed {len(all_launches)} valid launches")
 
-    # Find the closest future launch
-    closest_launch = None
-    min_days_diff = float('inf')
+    # ── Deduplicate launches_with_specific_times ─────────────────────────────
+    # The HTML scraper uses text[:200] as a seen-key, which means nested
+    # containers (e.g. a <div> wrapping a <p>) can both pass dedup and produce
+    # two identical-looking entries for the same launch. Collapse them here by
+    # (mission, date) so the posting loop only fires once per real launch.
+    seen_launch_keys = set()
+    deduped = []
+    for lnch in launches_with_specific_times:
+        key = (lnch.get('mission', ''), lnch.get('date', ''))
+        if key not in seen_launch_keys:
+            seen_launch_keys.add(key)
+            deduped.append(lnch)
+        else:
+            logging.info(f"Deduplicating repeat launch entry: {key}")
+    launches_with_specific_times = deduped
+
+    # ── Find closest future launch ───────────────────────────────────────────
+    closest_launch   = None
+    min_days_diff    = float('inf')
 
     for launch in all_launches:
         if launch['date_obj'] and launch['date_obj'] >= today:
             days_diff = (launch['date_obj'] - today).days
             if days_diff < min_days_diff:
-                min_days_diff = days_diff
+                min_days_diff  = days_diff
                 closest_launch = launch
 
-    # Only use a fallback if there are valid launches
     if closest_launch is None and all_launches:
-        logging.info("No future launches with valid dates found, using first available launch as closest")
+        logging.info("No future launches with parsed dates; using first entry as fallback")
         closest_launch = all_launches[0]
 
-    # Log debug info
     if closest_launch:
-        logging.info(f"Closest launch determined: {closest_launch['mission']} on {closest_launch['date']}")
+        logging.info(f"Closest launch: {closest_launch['mission']} on {closest_launch['date']}")
     else:
-        logging.info("No closest launch could be determined")
+        logging.info("No closest launch determined")
 
     return launches_with_specific_times, closest_launch
 
@@ -286,8 +279,20 @@ def create_post_text(launch=None, closest_launch=None, has_specific_times=False,
         if not has_specific_times:
             post_text += ""
 
-    # Closest launch info
-    if closest_launch and (not launch or closest_launch['mission'] != launch.get('mission')):
+    # Closest launch info — only append when it genuinely adds new information.
+    # In a specific-launch alert (launch is set, is_update is False) we skip this
+    # block entirely: the launch IS the closest launch, so repeating it would
+    # produce the bare "🚀 Wallops Launch Alert 🚀\n\n..." second post.
+    # In an update post (is_update=True) we always show the closest launch.
+    show_closest = (
+        closest_launch is not None
+        and (
+            is_update  # general update: always show closest
+            or (launch is None)  # no specific launch in context
+            or (closest_launch['mission'] != launch.get('mission'))  # truly different mission
+        )
+    )
+    if show_closest:
         post_text += "➡️ Next upcoming launch:\n"
         post_text += f"Mission: {closest_launch['mission']}\n"
         if closest_launch.get('vehicle'):
@@ -331,21 +336,34 @@ def post_to_bluesky(launches=None, closest_launch=None, has_specific_times=False
             logging.info("No closest launch available to post")
 
         if has_specific_times and launches:
-            # Handle specific launch posts
-            for launch in launches:
-                # Create post text with character limit in mind
-                post_text = create_post_text(launch=launch, closest_launch=closest_launch)
+                        # Handle specific launch posts
+                        for launch in launches:
+                                # Skip launches that are missing any of the three core fields.
+                                # A launch without a time has no business being in the
+                                # specific-times list, and one without a mission or date
+                                # would produce an empty / misleading post.
+                                if not launch.get('mission') or not launch.get('date') or not launch.get('time'):
+                                        logging.info(
+                                            f"Skipping launch entry missing required fields "
+                                            f"(mission={bool(launch.get('mission'))}, "
+                                            f"date={bool(launch.get('date'))}, "
+                                            f"time={bool(launch.get('time'))})"
+                                        )
+                                        continue
 
-                # Log output
-                logging.info(f"Post text: {post_text}")
-                logging.info(f"Character count: {count_graphemes(post_text)}")
+                                # Create post text with character limit in mind
+                                post_text = create_post_text(launch=launch, closest_launch=closest_launch)
 
-                # Create a post
-                client.send_post(text=post_text)
-                logging.info(f"Posted about launch: {launch['mission']}")
+                                # Log output
+                                logging.info(f"Post text: {post_text}")
+                                logging.info(f"Character count: {count_graphemes(post_text)}")
 
-                # Sleep for a moment to avoid rate limits
-                time.sleep(2)
+                                # Create a post
+                                client.send_post(text=post_text)
+                                logging.info(f"Posted about launch: {launch['mission']}")
+
+                                # Sleep for a moment to avoid rate limits
+                                time.sleep(2)
         else:
             # Handle general update post
             if closest_launch:
