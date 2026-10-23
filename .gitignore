@@ -1,0 +1,6 @@
+# macOS
+.DS_Store
+
+# Files the bot writes on each run
+wallops_debug.html
+wallops_launch_bot.log
